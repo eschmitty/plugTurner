@@ -7,32 +7,37 @@
 #include <Encoder.h>
 #include <U8g2lib.h>
 #include <Wire.h> //Library for I2C interface
-#include <TM1637Display.h>
 
-#define HWSERIAL Serial1
-#define modeSw 2
+//#define HWSERIAL Serial1
+#define modeSw 20
 #define zeroLed 16
 #define spindleLockLed 17
-#define stepPin 14
-#define dirPin 15
-#define zeroSw 10
+#define rpmLed 21
+#define holdLed 5
+#define stepPin 1
+#define dirPin 0
+#define zeroSw 14
 #define motorEn 8
-//#define rpmLed 21
-//#define holdLed 5
+#define oledClk 19
+#define oledDat 18
+#define oledRes 15
+#define encP1 23
+#define encP2 22
 
 long potVal = 0;
 int step1Speed = 0;
 int speedMin = 0;
 float speedMax = 266.666666;
-int jogSpeed = 3200;
+int jogSpeed = 6400;
+int jogAccel = 6400;
 int spinPos = 0;
 float rpm = 0;
 float spinPos2 = 0;
+float in, out;
 char spinPosStr[4];
 char spinPosPr[4];
 char rpmStr[3];
 int oldRpm = 0;
-bool oldMode = false;
 static unsigned char bass[] = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -123,41 +128,47 @@ static unsigned char bass[] = {
 };
 
 AccelStepper step1(AccelStepper::DRIVER, stepPin, dirPin); // type, step, dir
-Encoder enc1(23, 22);
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ 11,/* clock=*/ 19,/* data=*/ 18);   // Reset pin is required for this display
+Encoder enc1(encP1, encP2);
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, oledRes, oledClk, oledDat);   // (rotation, reset, clock, data)Reset pin is required for this display
 
 void setup() {
   //HWSERIAL.begin(9600);
-  delay(5000);3 3
+    step1.setCurrentPosition(160000);
+  pinMode(zeroLed, OUTPUT);
+  pinMode(spindleLockLed, OUTPUT);
+  pinMode(rpmLed, OUTPUT);
+  pinMode(holdLed, OUTPUT);
+  pinMode(motorEn, INPUT);
+  pinMode(modeSw, INPUT_PULLUP);
+  pinMode(zeroSw, INPUT_PULLUP);
+  digitalWrite(stepPin, LOW);
+  digitalWrite(dirPin, LOW);
+  digitalWrite(holdLed, HIGH);
+  digitalWrite(rpmLed, HIGH);
+  analogWrite(zeroLed, 255);
+  analogWrite(spindleLockLed, 255);
   Wire.begin();
   u8g2.setI2CAddress(0x78);  //if DC is pulled low- 10k resistor between DC and GND
   u8g2.begin();
   u8g2.clearBuffer();  // Clear display buffer
   u8g2.drawXBM(0, 0, 128, 64, bass);
   u8g2.sendBuffer(); // Send display buffer contents to OLED buffer.
-  delay(1000);
-  step1.setCurrentPosition(160000);
-  step1.setMaxSpeed(speedMax);
-  step1.setSpeed(0);
-  pinMode(zeroLed, OUTPUT);
-  pinMode(motorEn, INPUT);
-  pinMode(spindleLockLed, OUTPUT);
-  pinMode(modeSw, INPUT_PULLUP);
-  pinMode(zeroSw, INPUT_PULLUP);
-  delay(5); //allow time for pullup voltage to rise
-  digitalWrite(stepPin, LOW);
-  digitalWrite(dirPin, LOW);
+  delay(3000);
+  digitalWrite(holdLed, LOW);
+  digitalWrite(rpmLed, LOW);
+  analogWrite(spindleLockLed, 0);
+  attachInterrupt(digitalPinToInterrupt(zeroSw), exitPulse, FALLING);
+  attachInterrupt(digitalPinToInterrupt(motorEn), exitPulse, FALLING);
+  attachInterrupt(digitalPinToInterrupt(modeSw), modeChange, CHANGE);
   setZero();
   enc1.write(40000);
-  oldMode = !digitalRead(modeSw); //This forces "mode setup" to run on the first loop
+  modeChange();
 }
 
 void loop() {
-  modeChange();
   motorLock();
-  digitalWrite(spindleLockLed, HIGH);
   switch (digitalRead(modeSw)) {
-    case HIGH:
+    case HIGH: // RPM Mode
       step1Speed = (enc1.read() % 400) * (speedMax / 400);
       step1.setSpeed(step1Speed);
       if (step1Speed != oldRpm)  {
@@ -176,7 +187,7 @@ void loop() {
       }
       step1.runSpeed();
       break;
-    case LOW:
+    case LOW: // Hold Mode
       if (enc1.read() != (step1.currentPosition() / 4)) {
         step1.moveTo(enc1.read() * 4); // 100 clicks per rev of encoder, 4 pulses per click
       }
@@ -196,19 +207,6 @@ void loop() {
         u8g2.setFont(u8g2_font_logisoso38_tf);
         u8g2.drawStr(64 - (u8g2.getStrWidth(spinPosPr) / 2), 63, spinPosPr);
         u8g2.drawGlyph((64 - (u8g2.getStrWidth(spinPosPr) / 2)) + u8g2.getStrWidth(spinPosPr) - 2, 68, 0x00b0);
-        //        u8g2.drawCircle(110, 32, 15, U8G2_DRAW_ALL);
-        //        if (spinPos2 == 90) {
-        //          u8g2.drawHLine(110, 32, 15);
-        //        }
-        //        else if (spinPos2 == 180) {
-        //          u8g2.drawVLine(110, 32, 15);
-        //        }
-        //        else if (spinPos2 == 270) {
-        //          u8g2.drawHLine(95, 32, 15);
-        //        }
-        //        else if (spinPos2 == 0) {
-        //          u8g2.drawVLine(110, 17, 15);
-        //        }
         u8g2.sendBuffer();
       }
       step1.run();
@@ -228,31 +226,31 @@ void setZero() {
   while ((digitalRead(zeroSw) == HIGH)) { //wait for button press
     pulse(zeroLed);
   }
-  delay(5); //debounce
   analogWrite(zeroLed, 0);
+  detachInterrupt(digitalPinToInterrupt(zeroSw));
 }
 
 void modeChange() {
-  if (digitalRead(modeSw) != oldMode) { //Mode setup. code in this 'if' statement only runs when the mode switch positions changes.
-    switch (digitalRead(modeSw)) {
-      case HIGH: //RPM Mode
-        oldMode = HIGH;
-        oldRpm = -1;
-        break;
-      case LOW: // Jog Mode
-        oldMode = LOW;
-        step1.setCurrentPosition(((enc1.read() % 400) * 4) + 160000); //these two lines ensure the position reading
-        enc1.write((enc1.read() % 400) + 40000);                      //matches the dial after step count increases in RPM mode
-        step1.setMaxSpeed(jogSpeed);
-        step1.setAcceleration(1600);
-        break;
-    }
+  delay(5); //debounce
+  switch (digitalRead(modeSw)) {
+    case HIGH: //RPM Mode
+      digitalWrite(holdLed, LOW);
+      digitalWrite(rpmLed, HIGH);
+      oldRpm--;
+      step1.setMaxSpeed(speedMax);
+      break;
+    case LOW: // Jog Mode
+      digitalWrite(rpmLed, LOW);
+      digitalWrite(holdLed, HIGH);
+      step1.setCurrentPosition(((enc1.read() % 400) * 4) + 160000); //these two lines ensure the position reading
+      enc1.write((enc1.read() % 400) + 40000);                      //matches the dial after step count increases in RPM mode
+      step1.setMaxSpeed(jogSpeed);
+      step1.setAcceleration(jogAccel);
+      break;
   }
 }
 
 void pulse(int x) {
-  float in, out;
-
   for (in = 0; in < 6.283; in = in + 0.00157)
   {
     out = sin(in) * 127.5 + 127.5;
@@ -260,23 +258,22 @@ void pulse(int x) {
   }
 }
 
+void exitPulse() { //ISR
+  in = 6.284;
+}
+
 void motorLock() {
   while (digitalRead(motorEn) == HIGH) {
-    //   switch (digitalRead(modeSw)) {
-    //     case HIGH:
-    oldRpm = oldRpm + 1; //forces display update on spindle lock exit
-    //      break;
-    //  case LOW:
+    oldRpm++; //forces display update on spindle lock exit
     step1.setCurrentPosition(enc1.read() * 4); //allows repositioning of the encoder while spindle lock is off
-    //  break;
-    // }
     u8g2.clearBuffer();  // Clear display buffer
-    u8g2.setFont(u8g2_font_courB12_tf);
-    u8g2.drawStr(64 - (u8g2.getStrWidth("Spindle Free") / 2), 14, "Spindle Free");
-    u8g2.drawStr(64 - (u8g2.getStrWidth("Press motor") / 2), 28, "Press motor");
-    u8g2.drawStr(64 - (u8g2.getStrWidth("lock button") / 2), 42, "lock button");
-    u8g2.drawStr(64 - (u8g2.getStrWidth("to resume.") / 2), 56, "to resume.");
+    u8g2.setFont(u8g2_font_freedoomr10_tu);
+    u8g2.drawStr(64 - (u8g2.getStrWidth("SPINDLE FREE") / 2), 14, "SPINDLE FREE");
+    u8g2.drawStr(64 - (u8g2.getStrWidth("PRESS MOTOR") / 2), 28, "PRESS MOTOR");
+    u8g2.drawStr(64 - (u8g2.getStrWidth("LOCK BUTTON") / 2), 42, "LOCK BUTTON");
+    u8g2.drawStr(64 - (u8g2.getStrWidth("TO RESUME.") / 2), 56, "TO RESUME.");
     u8g2.sendBuffer(); // Send display buffer contents to OLED buffer.
     pulse(spindleLockLed);
   }
+  analogWrite(spindleLockLed, 255);
 }
